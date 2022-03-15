@@ -1,0 +1,232 @@
+---
+title: 'BCB420 A1: DHeydari '
+output:
+  html_document:
+    df_print: paged
+---
+
+# Data Selection & Information
+
+- I searched for a series of type "Expression profiling by high throughput sequencing" of Homo Sapiens
+- I specified the BRCA1 gene (Its part of my BCB430Y project, so I wanted to build on my pre-existing foundation)
+- [GSE158890](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158890)
+- Transcriptome analysis using Quant-RNAseq after NPM1 or HIF-1α silencing under normoxia or Hypoxia
+- Note: a lot of the code was adapted from Prof. Isserlin's lectures in BCB420!
+
+# Data Cleaning
+
+```{r, warning = FALSE, message = FALSE, results = 'hide'}
+
+#Downloaded packages if needed and calling them to library
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+library(BiocManager)
+
+if (!requireNamespace("GEOmetadb", quietly = TRUE))
+  BiocManager::install("GEOmetadb")
+library(GEOmetadb)
+
+if (!requireNamespace("GEOquery", quietly = TRUE))
+  BiocManager::install("GEOquery")
+library('GEOquery')
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+  BiocManager::install("edgeR")
+library(edgeR)
+
+if (!requireNamespace("biomaRt", quietly = TRUE))
+  BiocManager::install("biomaRt")
+library(biomaRt)
+
+# Load in the data
+GSE158890 <- getGEO("GSE158890", GSEMatrix =FALSE)
+
+# Print GEO description
+head(Meta(GSE158890))
+
+# Print the Platform Title
+current_gpl <- names(GPLList(GSE158890))[1]
+current_gpl_info <- Meta(getGEO(current_gpl))
+current_gpl_info$title
+
+# Print number of GEO datasets, and samples using this technology, respectively
+length(current_gpl_info$series_id)
+length(current_gpl_info$sample_id)
+
+
+```
+
+
+**Platform Title:** Ion Torrent Proton (Homo sapiens) 
+
+**Submission Date:** Oct 01 2020
+
+**organism:** Homo sapiens
+
+**Number of GEO datasets that use this techology:** 326
+
+**Number of GEO samples that use this technology:** 5109
+
+**Last Update:** Dec 15 2021
+
+
+How many unique genes do we have?
+Are there any non-genes in our dataset? If so what are they?
+Can we exclude them?
+
+```{r}
+
+# Accessing expression data, in the supplemental files
+
+sfiles = getGEOSuppFiles("GSE158890")
+fnames = rownames(sfiles)
+
+data = read.delim(fnames[1], header=TRUE, check.names = FALSE)
+
+
+# Number of genes in dataset
+length(data$gc_content)
+
+# Summarized counts (checking for duplicates)
+
+summarized_gene_counts <- sort(table(data$gene_name), decreasing = TRUE)
+
+# Top 10 observed genes
+
+summarized_gene_counts[1:10]
+
+knitr::kable(summarized_gene_counts[which(summarized_gene_counts>1)[1:10]], format='html')
+
+
+```
+
+**Filtering out weakly expressed and noninformative features (w/ edgeR protocol)**
+
+```{r warning = FALSE, message = FALSE, results = 'hide'}
+
+# n = 10 (10 samples)
+
+cpms = cpm(data[,9:length(colnames(data))])
+rownames(cpms) <- data[,1]
+
+keep = rowSums(cpms >1) >= 10
+data_filtered = data[keep,]
+
+# Impact on dataset
+
+dim(data_filtered)
+#[1] 10146    18
+
+dim(data)
+#[1] 57736    18
+
+# Succesfully filtered a lot of low-value data out 
+
+```
+**Much fewer observable duplicate than before!**
+```{r}
+
+# Accessing expression data, in the supplemental files
+
+summarized_gene_counts_filtered <- sort(table(data_filtered$gene_name), decreasing = TRUE)
+knitr::kable(summarized_gene_counts_filtered[ which(summarized_gene_counts_filtered>1)[1:10]], format='html')
+
+#
+```
+**Compared to previous gene counts, the entire top 10 is in single digit repeats, with only 2 being greater than 2**
+
+# Normalization
+
+**First step, Convert Ensembl ID to HUGO symbol.** Done using BiocManager's BioMart
+
+
+```{r warning = FALSE, message = FALSE, results = 'hide'}
+
+#Checking to see if done already:
+
+#Converting HUGOs
+
+convertedHugos <- "hugos.rds"
+
+if(file.exists(convertedHugos)) {
+  
+  converted <- readRDS(convertedHugos)
+  
+} else {
+  
+  mart <- useMart("ensembl", dataset = 'hsapiens_gene_ensembl')
+  
+  genes <- c(data_filtered$gene_id)
+  
+  converted <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"), filters = "ensembl_gene_id", values = genes, mart = mart)
+  
+  hugos <- converted$hgnc_symbol
+  
+  saveRDS(converted, convertedHugos)
+  
+}
+
+#Merginging successfully converted HUGOs with original Ensembl list. Some will not have matched. 
+
+x <- merge(converted, data_filtered, by.x = 1, by.y = 0, all.y=TRUE)
+
+missing <- x$ensembl_gene_id[ which(is.na(x$hgnc_symbol))]
+
+```
+
+
+**Boxplot: Visualization of the Data distributions over the 10 samples**
+```{r}
+
+data2plot <- log2(cpm(data_filtered[,9:length(colnames(data_filtered))]))
+boxplot(data2plot, xlab = "Samples", ylab = "log2 CPM",
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "HIF/NPM1 RNASeq Samples")
+#draw the median on each box plot
+abline(h = median(apply(data2plot, 2, median)),
+       col = "green", lwd = 0.6, lty = "dashed")
+
+```
+
+**
+
+# Interpret
+
+
+**What are the control and test conditions of the dataset?**
+
+Controls: WT_norm_1,WT_norm_2, WT_hyp_1, WT_hyp_2 
+  - 2 samples of wildtype in healthy normaxia
+  - 2 samples of wildtype in hypoxia
+  
+Tests: siHIF1_hyp_1,	siHIF1_hyp_2, siNPM_hyp_1,	siNPM_hyp_2, siNPM_norm_1,	siNPM_norm_2
+  - 2 samples w/ silenced HIF1 in hypoxia
+  - 2 samples w/ silenced NPM1 in hypoxia
+  - 2 samples w/ silecned NPM1 in healthy normaxia
+
+**Why is the dataset of interest to you?**
+
+I am interested in studying variation that correlates with better or worse health metrics in conditions of average or low oxygen as I believe this type of information can be useful for high-level athletic training analysis. By understanding how various cells in an individuals body perform in different oxygen environments, you can project how an athlete may perform differently at the start of a race versus the end of a race, or in different climates with different conditions and such. 
+
+**Were there expression values that were not unique for specific genes? How did you handle these?**
+
+There were a number of expression values that were not unique for specific genes, most commonly 1 or 0. I removed these values from the dataset. To see the exact steps, please refer to the section "Filtering out weakly expressed and noninformative features (w/ edgeR protocol)".
+
+**Were there expression values that could not be mapped to current HUGO symbols?**
+
+Yes, out of the 10146 genes which were present post filtration, 9883 of them could be mapped to current HUGO symbols, using Biomart. To see the steps of this process, please see "Normalization: Convert Ensembl to HUGO".
+
+**How many outliers were removed?**
+
+Originally, there were 57736 items in my gene list of the dataset. Before HUGO, there were 10146. Therefore 47590 outliers were removed. 
+
+
+**How did you handle replicates?**
+
+In some cases, where the replicates were short RNAs such as Y_RNA, they were filtered out in the HUGO mapping process. Where that was not the case, I would have deleted the duplicate data, as it is likely to be erroneous.
+
+**What is the final coverage of your dataset?**
+
+After cleaning up the duplicates, invalid Ensembl IDs, and converting to HUGO, the coverage of the dataset was pretty good. 9883 genes were mapped, with 10 different samples, 4 of which were genetically unaffected or undiseased. 
+

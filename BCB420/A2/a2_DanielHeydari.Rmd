@@ -1,0 +1,876 @@
+---
+title: "A2: Differential Gene expression and Preliminary ORA"
+author: "Daniel Heydari"
+date: "3/15/2022"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+In this assignment, the task was to use the normalized expression data from A1 and rank the genes via differential expression. The genetic data being used was downloaded from GEO with id GSE158890
+[(Link)](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158890). The RNAseq data was collected by Koukoulas et al., as part of a study looking to better understand the role of Hypoxia inducible factor-1 (HIF-1) and Nucleophosmin 1 (NPM1) on gene expression under hypoxia. 
+
+
+## Required Packages
+
+```{r warning = FALSE, message = FALSE}
+#install.packages('knitr', dependencies = TRUE)
+
+library(knitr)
+library(devtools)
+library(limma)
+library(edgeR)
+library(dplyr)
+library(magrittr)
+library(kableExtra)
+library(circlize)
+library(ComplexHeatmap)
+library(Biobase)
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+#BiocManager::install("ComplexHeatmap")
+
+#install.packages("circlize")
+
+```
+
+## Read in the data
+
+```{r message = FALSE}
+
+normalized_count_data <- read.table(file=file.path(getwd(),"data", 
+                "GSE158890_normalized_counts.txt"),
+                                    header = TRUE,sep = "\t",
+                                    stringsAsFactors = FALSE,
+                                    check.names=FALSE)
+
+```
+
+# Generate Heatmap
+
+```{r current_heatmap, message = FALSE}
+
+library(ComplexHeatmap)
+library(circlize)
+
+heatmap_matrix <- normalized_count_data
+rownames(heatmap_matrix) <- rownames(normalized_count_data)
+colnames(heatmap_matrix) <- colnames(normalized_count_data[,
+                        1:ncol(normalized_count_data)])
+
+if(min(heatmap_matrix) == 0){
+    heatmap_col = colorRamp2(c( 0, max(heatmap_matrix)), 
+                             c( "white", "red"))
+  } else {
+    heatmap_col = colorRamp2(c(min(heatmap_matrix), 0, 
+          max(heatmap_matrix)), c("blue", "white", "red"))
+  }
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix),
+      show_row_dend = TRUE,show_column_dend = TRUE, 
+      col=heatmap_col,show_column_names = TRUE, 
+      show_row_names = FALSE,show_heatmap_legend = TRUE)
+
+plot(current_heatmap)
+```
+
+## Row Normalized Heatmap
+
+```{r rn_heatmap, message = FALSE}
+
+heatmap_matrix <- t(scale(t(heatmap_matrix)))
+  if(min(heatmap_matrix) == 0){
+    heatmap_col = colorRamp2(c( 0, max(heatmap_matrix)), 
+                      c( "white", "red"))
+  } else {
+    heatmap_col = colorRamp2(c(min(heatmap_matrix), 0,
+        max(heatmap_matrix)), c("blue", "white", "red"))
+  }
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix),
+      show_row_dend = TRUE,show_column_dend = TRUE, 
+      col=heatmap_col,show_column_names = TRUE, 
+      show_row_names = FALSE,show_heatmap_legend = TRUE)
+
+plot(current_heatmap)
+```
+
+
+# Separate Samples
+
+The paper finds that extracellular signal‐regulated kinases1/2 (ERK1/2) promote HIF/NPM1 processess, so this was used as the GoI. ERK1 -> HGNC: MAPK3 -> EnsemblID: ENSG00000102882
+
+```{r message = FALSE}
+
+siNPM_hyp_samples <- grep(colnames(normalized_count_data),
+                          pattern="siNPM_hyp")
+                          
+wtNT_hyp_samples <- grep(colnames(normalized_count_data),
+                          pattern="wtNT_hyp")
+
+wtNT_norm_samples <- grep(colnames(normalized_count_data),
+                          pattern="wtNT_norm")
+
+siNPM_norm_samples <- grep(colnames(normalized_count_data),
+                          pattern="siNPM_norm")
+
+siHIF1_hyp_samples <- grep(colnames(normalized_count_data),
+                          pattern="siHIF1_hyp")
+
+
+
+gene_of_interest <- which(rownames(normalized_count_data) == "ENSG00000102882")
+
+MAPK3_siNPM_hyp_samples <-  t(normalized_count_data  [gene_of_interest, siNPM_hyp_samples])
+
+colnames(MAPK3_siNPM_hyp_samples) <-   c("MAPK3 siNPM_hyp Samples")
+
+MAPK3_siNPM_hyp_samples
+
+
+MAPK3_siHIF1_hyp_samples <-  t(normalized_count_data  [gene_of_interest, siHIF1_hyp_samples])
+
+colnames(MAPK3_siHIF1_hyp_samples) <-   c("MAPK3 siHIF1_hyp_samples")
+
+MAPK3_siHIF1_hyp_samples
+
+
+MAPK3_wtNT_hyp_samples <-  t(normalized_count_data  [gene_of_interest, wtNT_hyp_samples])
+
+colnames(MAPK3_wtNT_hyp_samples) <-   c("MAPK3 wtNT_hyp Samples")
+
+MAPK3_wtNT_hyp_samples
+
+
+MAPK3_wtNT_norm_samples <-  t(normalized_count_data  [gene_of_interest, wtNT_norm_samples])
+
+colnames(MAPK3_wtNT_norm_samples) <-   c("MAPK3 wtNT_norm Samples")
+
+MAPK3_wtNT_norm_samples
+
+
+MAPK3_siNPM_norm_samples <-  t(normalized_count_data  [gene_of_interest, siNPM_norm_samples])
+
+colnames(MAPK3_siNPM_norm_samples) <-   c("MAPK3 siNPM_norm Samples")
+
+MAPK3_siNPM_norm_samples
+
+
+
+```
+# Welch Two-Sample t-test (Between siNPM_hyp and wtNT_hyp)
+ I chose siNPM_hyp and wtNT_hyp, because I wanted to see if there would be differences in expression of MAPK3 in hypoxia conditions, between the wildtype, and the NPM1 silenced. 
+``` {r} 
+
+t.test(x=t(MAPK3_siNPM_hyp_samples),y=t(MAPK3_wtNT_hyp_samples))
+
+```
+
+# Limma Variable Controls
+
+```{r limmaMDS}
+
+pat_colors <- rainbow(10)
+pat_colors <- unlist(lapply(pat_colors,FUN=function(x){rep(x,2)}))
+
+limma::plotMDS(heatmap_matrix, col = pat_colors )
+
+```
+
+# Model and Create Data Matrix
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+# Sample design from A1
+
+# Hard fix because wtNT_hyp 1 and 2 are named using dash ('-'), instead of underscore ('_')
+
+colnames(normalized_count_data) <- c('siHIF1_hyp_1', 'siHIF1_hyp_2', 'siNPM_hyp_1', 'siNPM_hyp_2',  'wtNT_hyp_1', 'wtNT_hyp_2', 'wtNT_norm_1','wtNT_norm_2', 'siNPM_norm_1', 'siNPM_norm_2')
+
+samples <- data.frame(lapply(colnames(normalized_count_data),
+                             FUN=function(x){unlist(strsplit(x,
+                                                             split = "\\_"))[c(1,2,3)]}))
+colnames(samples) <- colnames(normalized_count_data)
+rownames(samples) <- c("type", "condition","patients")
+samples <- data.frame(t(samples))
+
+#Generating simple model design
+
+model_design <- model.matrix(~ samples$type)
+
+expressionMatrix <- as.matrix(normalized_count_data)
+rownames(expressionMatrix) <- rownames(normalized_count_data)
+colnames(expressionMatrix) <- colnames(normalized_count_data)
+minimalSet <- ExpressionSet(assayData=expressionMatrix)
+
+fit <- lmFit(minimalSet, model_design)
+
+
+# Applying Empirical Bayes to compute differential expression
+
+fit2 <- eBayes(fit,trend=TRUE)
+
+
+topfit <- topTable(fit2,
+ coef=ncol(model_design),
+ adjust.method = "BH",
+ number = nrow(expressionMatrix))
+
+#merge topfit table with Ensembl IDs
+
+output_hits <- merge(rownames(normalized_count_data),
+ topfit,
+ by.y=0,by.x=1,
+ all.y=TRUE)
+
+#sort by pvalue
+output_hits <- output_hits[order(output_hits$P.Value),]
+
+
+kable(output_hits[1:10,],type="html",row.names = FALSE)
+
+
+```
+# p-value and Multiple hypothesis testing Analysis
+
+## How many gene pass the threshold p-value < 0.05?
+
+```{r}
+length(which(output_hits$P.Value < 0.05))
+```
+
+## How many genes pass correction
+```{r}
+length(which(output_hits$adj.P.Val < 0.05))
+```
+
+# Improving the Model
+
+```{r }
+
+model_design_pat <- model.matrix(
+ ~ samples$type + samples$condition)
+
+kable(model_design_pat, type="html")
+
+# Fit our data to the model created above
+fit_pat <- lmFit(minimalSet, model_design_pat)
+```
+
+# Analyzing the Improved Model
+
+## Empirical Bayes to compute diff. expression
+```{r}
+
+fit2_pat <- eBayes(fit_pat,trend=TRUE)
+
+topfit_pat <- topTable(fit2_pat,
+ coef=ncol(model_design_pat),
+ adjust.method = "BH",
+ number = nrow(expressionMatrix))
+
+# merge topfit table with Ensembl IDs
+output_hits_pat <- merge(normalized_count_data[,1:1],
+ topfit_pat,by.y=0,by.x=1,
+ all.y=TRUE)
+
+# sort by pvalue
+output_hits_pat <- output_hits_pat[order(output_hits_pat$P.Value),]
+
+# Display top 10
+
+kable(output_hits_pat[1:10,], type="html",row.names = FALSE)
+
+```
+
+## How many gene pass the threshold p-value < 0.05?
+
+```{r}
+length(which(output_hits_pat$P.Value < 0.05))
+```
+
+## How many genes pass correction
+```{r}
+length(which(output_hits_pat$adj.P.Val < 0.05))
+```
+# Comparing the Simple and Gene Type Model
+
+``` {r}
+
+simple_model_pvalues <- data.frame(ensembl_id = output_hits$x, simple_pvalue=output_hits$P.Value)
+
+type_model_pvalues <- data.frame(ensembl_id = output_hits_pat$x, type_pvalue = output_hits_pat$P.Value)
+
+two_models_pvalues <- merge(simple_model_pvalues, type_model_pvalues,by.x=1,by.y=1)
+
+two_models_pvalues$colour <- "black"
+
+two_models_pvalues$colour[ two_models_pvalues$simple_pvalue<0.05] <- "orange"
+
+two_models_pvalues$colour[ two_models_pvalues$type_pvalue <0.05] <- "blue"
+
+two_models_pvalues$colour[ two_models_pvalues$simple_pvalue<0.05 & two_models_pvalues$type_pvalue<0.05] <- "red"
+
+
+plot(two_models_pvalues$simple_pvalue, two_models_pvalues$type_pvalue, col = two_models_pvalues$colour, xlab = "simple model p-values", ylab ="Type model p-values", main="Simple vs Type Limma")
+legend(0.9, 1, legend=c("Simple", "Type", "Both", "Neither"), cex = 0.7 ,  fill=c("orange", "blue", 'red', 'black'))
+
+```
+Figure: Blue represents genes that were found to be significant in the Type-based model, Orange those significant in Simple model, and Red is those significant in both
+
+# Comparing the Simple and Gene Type Model looking for GoI:  MAPK3
+
+```{r}
+
+ensembl_of_interest <- rownames(normalized_count_data)[ which("ENSG00000102882" %in% rownames(normalized_count_data))]
+
+two_models_pvalues$colour <- "grey"
+
+two_models_pvalues$colour[two_models_pvalues$ensembl_id== ensembl_of_interest] <- "red"
+
+plot(two_models_pvalues$simple_pvalue,
+ two_models_pvalues$patient_pvalue,
+ col = two_models_pvalues$colour,
+ xlim=c(0,1), ylim=c(0,1),
+ xlab = "simple model p-values", 
+ ylab ="Type model p-values",
+ main="Simple vs Type Limma")
+points(two_models_pvalues[which(
+ two_models_pvalues$ensembl_id == ensembl_of_interest),2:3],
+ pch=20, col="red", cex=1.5)
+legend(0.8,1,legend=c("MAPK3","rest"),
+ fill=c("red","grey"),cex = 0.7)
+
+plot(two_models_pvalues$simple_pvalue,
+ two_models_pvalues$patient_pvalue,
+ col = two_models_pvalues$colour,
+ xlab = "simple model p-values", 
+ ylab ="Type model p-values",
+ main="Simple vs Type Limma")
+points(two_models_pvalues[which(
+ two_models_pvalues$ensembl_id == ensembl_of_interest),2:3],
+ pch=20, col="red", cex=1.5)
+legend(0.8,1,legend=c("MAPK3","rest"),
+ fill=c("red","grey"),cex = 0.7)
+
+
+
+```
+
+
+# Heatmap Using Limma
+
+``` {r}
+
+
+top_hits <- output_hits_pat$x[output_hits_pat$P.Value<0.05]
+
+heatmap_matrix_tophits <- t( scale(t(heatmap_matrix[ which(rownames(heatmap_matrix) %in% top_hits),])))
+
+if(min(heatmap_matrix_tophits) == 0){
+ heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)),
+ c( "white", "red"))
+ } else {
+   
+ heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0, max(heatmap_matrix_tophits)), c("blue", "white", "red"))
+ }
+
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits),
+ cluster_rows = TRUE,
+ cluster_columns = TRUE,
+ show_row_dend = TRUE,
+ show_column_dend = TRUE,
+ col=heatmap_col,
+ show_column_names = TRUE,
+ show_row_names = FALSE,
+ show_heatmap_legend = TRUE,
+ )
+
+plot(current_heatmap)
+
+```
+ 
+# Heatmap with Model and Limma
+
+``` {r}
+
+heatmap_matrix_tophits<- heatmap_matrix_tophits[,
+     c(grep(colnames(heatmap_matrix_tophits),
+     pattern = "siHIF1_hyp"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "siNPM_hyp"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "wtNT_hyp"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "wtNT_norm"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "siNPM_norm"))]
+
+
+if(min(heatmap_matrix_tophits) == 0){
+ heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)),
+ c( "white", "red"))
+ } else {
+ heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0,
+ max(heatmap_matrix_tophits)),
+ c("blue", "white", "red"))
+ }
+
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits),
+ cluster_rows = TRUE,
+ cluster_columns = FALSE,
+ show_row_dend = TRUE,
+ show_column_dend = TRUE,
+ col=heatmap_col,
+ show_column_names = TRUE,
+ show_row_names = FALSE,
+ show_heatmap_legend = TRUE,
+ )
+
+plot(current_heatmap)
+
+```
+
+
+# Heatmap of Top Hits with Limma (p < 0.01)
+``` {r}
+
+top_hits <- output_hits_pat$x[
+ output_hits_pat$P.Value<0.01]
+heatmap_matrix_tophits <- t(
+ scale(t(heatmap_matrix[which(rownames(heatmap_matrix)
+ %in% top_hits),])))
+heatmap_matrix_tophits<- heatmap_matrix_tophits[,
+     c(grep(colnames(heatmap_matrix_tophits),
+     pattern = "siNPM_hyp"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "wtNT_hyp"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "wtNT_norm"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "siNPM_norm"))]
+if(min(heatmap_matrix_tophits) == 0){
+ heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)),
+ c( "white", "red"))
+ } else {
+ heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0,
+ max(heatmap_matrix_tophits)),
+ c("blue", "white", "red"))
+ }
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits),
+ cluster_rows = TRUE, show_row_dend = TRUE,
+ cluster_columns = FALSE,show_column_dend = FALSE,
+ col=heatmap_col,show_column_names = TRUE,
+ show_row_names = FALSE,show_heatmap_legend = TRUE)
+
+plot(current_heatmap)
+
+```
+
+
+
+# EdgeR: Quasi Liklihood Test
+
+I chose Quasi Liklihood test as it was Prof. Isserlin's recommendation in lecture; the dataset has a relatively large number of samples and factors causing variability.
+
+```{r}
+
+# Setting up edgeR matrix
+
+cpms = cpm(normalized_count_data)
+rownames(cpms) <- normalized_count_data[,1]
+keep = rowSums(cpms >1) >=10
+filtered_data <- normalized_count_data[keep,]
+filtered_data_matrix <- as.matrix(filtered_data)
+
+d = DGEList(counts=filtered_data_matrix, group=samples$type)
+
+# Estimating Dispersion
+
+d <- estimateDisp(d, model_design_pat)
+# Fit the model
+
+fit <- glmQLFit(d, model_design_pat)
+
+kable(model_design_pat, type="html") %>% row_spec(0, angle = -45)
+
+
+
+```
+Calculate diff. exp. using Quasi Liklihood method
+
+```{r}
+
+
+
+
+qlf.siNPM_hyp_vs_other <- glmQLFTest(fit, coef='samples$typesiNPM')
+kable(topTags(qlf.siNPM_hyp_vs_other), type="html",row.names = FALSE)
+```
+
+``` {r}
+
+qlf_output_hits <- topTags(qlf.siNPM_hyp_vs_other,sort.by = "PValue",
+ n = nrow(normalized_count_data))
+
+# How many gene pass the threshold p-value < 0.05?
+
+length(which(qlf_output_hits$table$PValue < 0.05))
+
+# How many genes pass correction?
+
+length(which(qlf_output_hits$table$FDR < 0.05))
+
+```
+
+# Comparing Limma & Quasi Liklihood Models
+
+``` {r}
+
+
+qlf_pat_model_pvalues <- data.frame(
+ ensembl_id = rownames(qlf_output_hits$table),
+ qlf_patient_pvalue=qlf_output_hits$table$PValue)
+limma_pat_model_pvalues <- data.frame(
+ ensembl_id = output_hits_pat$x,
+ limma_patient_pvalue = output_hits_pat$P.Value)
+two_models_pvalues <- merge(qlf_pat_model_pvalues,
+ limma_pat_model_pvalues,
+ by.x=1,by.y=1)
+two_models_pvalues$colour <- "black"
+two_models_pvalues$colour[two_models_pvalues$qlf_patient_pvalue
+ <0.05] <- "orange"
+two_models_pvalues$colour[two_models_pvalues$limma_patient_pvalue
+ <0.05] <- "blue"
+two_models_pvalues$colour[two_models_pvalues$qlf_patient_pvalue
+ <0.05 &
+two_models_pvalues$limma_patient_pvalue<0.05] <- "red"
+plot(two_models_pvalues$qlf_patient_pvalue,
+ two_models_pvalues$limma_patient_pvalue,
+ col = two_models_pvalues$colour,
+ xlab = "QLF Type model p-values",
+ ylab ="Limma Type model p-values",
+ main="QLF vs Limma")
+
+legend(0.9, 1, legend=c("QLF", "Limma", "Both", "Neither"), cex = 0.7 ,  fill=c("orange", "blue", 'red', 'black'))
+
+# Orange represents genes significantly detected using Quasi-Liklihood, Blue those significant with Limma, Red for those significant in both, and Black for those significant in neither.
+
+
+```
+
+
+# Comparing Limma and QLF looking for GoI:  MAPK3
+```{r}
+
+ensembl_of_interest <- rownames(normalized_count_data)[ which("ENSG00000102882" %in% rownames(normalized_count_data))]
+
+two_models_pvalues$colour <- "grey"
+two_models_pvalues$colour[two_models_pvalues$ensembl_id
+ ==ensembl_of_interest] <- "red"
+plot(two_models_pvalues$qlf_patient_pvalue,
+ two_models_pvalues$limma_patient_pvalue,
+ col = two_models_pvalues$colour,
+ xlab = "QLF Type model p-values",
+ ylab ="Limma Type model p-values",
+ main="QLF vs Limma")
+points(two_models_pvalues[
+ two_models_pvalues$ensembl_id==ensembl_of_interest,2:3],
+ pch=24, col="red", cex=1.5)
+
+# MAPK3 Gene was only found to be significantly expressed in the Limma model
+
+```
+
+# Heatmap of top hits (p < 0.05) using Quasi liklihood model
+
+``` {r}
+
+top_hits <- rownames(qlf_output_hits$table)[
+ output_hits_pat$P.Value<0.05]
+heatmap_matrix_tophits <- t(
+ scale(t(heatmap_matrix[which(rownames(heatmap_matrix)
+ %in% top_hits),])))
+if(min(heatmap_matrix_tophits) == 0){
+ heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)),
+ c( "white", "red"))
+ } else {
+ heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0,
+ max(heatmap_matrix_tophits)),
+ c("blue", "white", "red"))
+ }
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits),
+ cluster_rows = TRUE,
+ cluster_columns = TRUE,
+ show_row_dend = TRUE,
+ show_column_dend = TRUE,
+ col=heatmap_col,
+ show_column_names = TRUE,
+ show_row_names = FALSE,
+ show_heatmap_legend = TRUE,
+ ) 
+
+plot(current_heatmap)
+
+```
+
+# Heatmap of top hits (p < 0.05) using Quasi liklihood model and sorting by Type
+
+```{r}
+
+top_hits <- rownames(qlf_output_hits$table)[output_hits_pat$P.Value
+ <0.05]
+heatmap_matrix_tophits <- t(
+ scale(t(heatmap_matrix[which(rownames(heatmap_matrix)
+ %in% top_hits),])))
+heatmap_matrix_tophits<- heatmap_matrix_tophits[,
+     c(grep(colnames(heatmap_matrix_tophits),
+     pattern = "siNPM_hyp"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "wtNT_hyp"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "wtNT_norm"),
+     grep(colnames(heatmap_matrix_tophits),
+     pattern = "siNPM_norm"))]
+
+if(min(heatmap_matrix_tophits) == 0){
+ heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)),
+ c( "white", "red"))
+ } else {
+ heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0,
+ max(heatmap_matrix_tophits)),
+ c("blue", "white", "red"))
+ }
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits),
+ cluster_rows = TRUE,
+ cluster_columns = FALSE,
+ show_row_dend = TRUE,
+ show_column_dend = FALSE,
+ col=heatmap_col,
+ show_column_names = TRUE,
+ show_row_names = FALSE,
+ show_heatmap_legend = TRUE)
+
+plot(current_heatmap)
+
+```
+
+# Threshold Over-representation Analysis
+
+
+In order to analyse the up and downregulated genes, we will use the edgeR package. edgeR package has some features that are specific to RNA-seq. 
+
+
+# Setting up edgeR matrix
+
+``` {r warning = FALSE} 
+library(GEOquery)
+sfiles = getGEOSuppFiles("GSE158890")
+fnames = rownames(sfiles)
+
+data = read.delim(fnames[1], header=TRUE, check.names = FALSE)
+
+summarized_gene_counts <- sort(table(data$gene_name), decreasing = TRUE)
+
+summarized_gene_counts[1:7]
+
+
+cpms = cpm(data[,9:length(colnames(data))])
+rownames(cpms) <- data[,1]
+keep = rowSums(cpms >1) >=10
+data_filtered = data[keep,]
+
+filtered_data_matrix <- as.matrix(data_filtered[,9:18])
+rownames(filtered_data_matrix) <- data_filtered$gene_id
+
+```
+
+# Creating Sample Groups: By Type
+``` {r warning = FALSE} 
+colnames(normalized_count_data) <- c('siHIF1_hyp_1', 'siHIF1_hyp_2', 'siNPM_hyp_1', 'siNPM_hyp_2',  'wtNT_hyp_1', 'wtNT_hyp_2', 'wtNT_norm_1','wtNT_norm_2', 'siNPM_norm_1', 'siNPM_norm_2')
+
+samples <- data.frame(lapply(colnames(normalized_count_data),
+                             FUN=function(x){unlist(strsplit(x,
+                                                             split = "\\_"))[c(1,2,3)]}))
+colnames(samples) <- colnames(normalized_count_data)
+rownames(samples) <- c("type", "condition","patients")
+samples <- data.frame(t(samples))
+
+
+d = DGEList(counts=filtered_data_matrix, group=samples$type)
+
+```
+# Estimating Dispersion, Caluclating Normalization Factors, and Fitting Model
+
+``` {r warning = FALSE}
+model_design_pat <- model.matrix(~ samples$type + samples$condition)
+
+# estimate disperson 
+d <- estimateDisp(d, model_design_pat)
+
+#calculate normalization factors
+d <- calcNormFactors(d)
+
+#fit model
+fit <- glmQLFit(d, model_design_pat)
+
+qlf.Fraction <- glmQLFTest(fit, coef = 'samples$typesiNPM') 
+
+
+qlf_output_hits <- topTags(qlf.Fraction,sort.by = "PValue",
+                           n = nrow(filtered_data_matrix))
+```
+
+# Threshold Analysis
+
+## How many gene pass the threshold p-value < 0.05?
+
+```{r}
+length(which(qlf_output_hits$table$PValue < 0.05))
+```
+
+## How many genes pass correction using edgeR 
+```{r}
+length(which(qlf_output_hits$table$FDR < 0.05))
+```
+
+## How many genes are upregulated
+
+```{r}
+length(which(qlf_output_hits$table$PValue < 0.05
+             & qlf_output_hits$table$logFC > 0))
+```
+
+
+## How many genes are downregulated 
+
+```{r}
+length(which(qlf_output_hits$table$PValue < 0.05
+             & qlf_output_hits$table$logFC < 0))
+```
+
+
+
+# Creating the Threshold list. 
+
+Merge gene names with the top hits
+``` {r warning = FALSE}
+qlf_output_hits_withgn <- merge(data$gene_id,qlf_output_hits, by.x=1, by.y = 0)
+
+qlf_output_hits_withgn[,"rank"] <- -log(qlf_output_hits_withgn$PValue,base =10) * sign(qlf_output_hits_withgn$logFC)
+
+qlf_output_hits_withgn <- qlf_output_hits_withgn[order(qlf_output_hits_withgn$rank),]
+```
+
+
+## Upregulated Genes (+logFc)
+``` {r warning = FALSE}
+upregulated_genes <- qlf_output_hits_withgn$x[
+  which(qlf_output_hits_withgn$PValue < 0.05 
+             & qlf_output_hits_withgn$logFC > 0)]
+```
+
+# Downregulated Genes (-logFc) 
+``` {r warning = FALSE}
+downregulated_genes <- qlf_output_hits_withgn$x[
+  which(qlf_output_hits_withgn$PValue < 0.05 
+             & qlf_output_hits_withgn$logFC < 0)]
+```
+
+# Downloading Significantly Regulate Genes
+
+``` {r warning = FALSE}
+write.table(x=upregulated_genes,
+            file=file.path(getwd(),"GSE158890_upregulated_genes.txt"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE)
+
+ 
+write.table(x=downregulated_genes,
+            file=file.path(getwd(),"GSE158890_downregulated_genes.txt"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE)
+
+  
+write.table(x=data.frame(genename= qlf_output_hits_withgn$x),
+            file=file.path(getwd(),"GSE158890_ranked_genelist.txt"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE)
+```
+
+# GProfiler Analysis of Up and Down Reguatled Genes
+
+Data Sources: GO biological process, Reactome, WikiPathways
+
+## Upregulated Genes
+
+Queried Genes: GSE158890_upregulated_genes.txt
+
+GO:BP Best Match: 'organonitrogen compound metabolic process', GO:1901564, p = 1.435×10-19
+REAC:R-HSA Best Match: 'Glycolysis', REAC:R-HSA-70171, p = 2.130×10-4
+WP:WP Best Match: 'Photodynamic therapy-induced HIF-1 survival signaling', WP:WP3614, p = 2.418×10-7
+
+## Downregulated Genes
+
+Queried Genes: GSE158890_upregulated_genes.txt
+
+GO:BP Best Match: 'organonitrogen compound metabolic process', GO:1901564, p = 2.843×10-8
+REAC:R-HSA Best Match: 'Cholesterol biosynthesis', REAC:R-HSA-191273, p = 3.706×10-3
+WP:WP Best Match: 'Cholesterol biosynthesis pathway', WP:WP197, p = 2.426×10-5
+
+# Results & Analysis
+
+From our analysis of this dataset there were a few results of interest. Firstly, 'organonitrogen compound metabolic process' was found to be over-represented in the ORA on both the upregulated and downregualted genes. Initially, this threw me off, but I believe this indicates that the genes of interest HIF & NPM1 are strongly connected to organonitrogen metabolism. Furthermore, there is a subset of genes and proteins that are activated when HIF or NPM1 are silenced, which would otherwise be dormant in healthy cells. The same goes for the inverse, in HIF & NPM1 wildtype cases, genes designed for an inhibited pathway are activated to attempt to repair the issue or find a work-around. 
+
+# References
+
+Prof. Isserlin's BCB420 Lectures 6-7 2021-22
+
+Chen Y, Lun ATL, Smyth GK (2016). From reads to genes to pathways: differential expression analysis of
+  RNA-Seq experiments using Rsubread and the edgeR quasi-likelihood pipeline. F1000Research 5, 1438  
+
+Gu, Z. (2014) circlize implements and enhances circular visualization in R. Bioinformatics.
+
+Gu, Z. (2016) Complex heatmaps reveal patterns and correlations in multidimensional genomic data.
+  Bioinformatics. https://doi.org/10.1093/bioinformatics/btw313.
+
+Hadley Wickham, Jim Hester, Winston Chang and Jennifer Bryan (2021). devtools: Tools to Make Developing R
+  Packages Easier. R package version 2.4.3. https://CRAN.R-project.org/package=devtools
+  
+Hadley Wickham, Romain François, Lionel Henry and Kirill Müller (2022). dplyr: A Grammar of Data
+  Manipulation. R package version 1.0.8. https://CRAN.R-project.org/package=dplyr
+
+Hao Zhu (2021). kableExtra: Construct Complex Table with 'kable' and Pipe Syntax. R package version
+  1.3.4. https://CRAN.R-project.org/package=kableExtra
+  
+Koukoulas K, Giakountis A, Karagiota A, Samiotaki M et al. ERK signaling controls productive HIF-1 binding to chromatin and cancer cell adaptation to hypoxia through HIF-1α interaction with NPM1. Mol Oncol 2021 Dec;15(12):3468-3489. PMID: 34388291
+  
+McCarthy DJ, Chen Y and Smyth GK (2012). Differential expression analysis of multifactor RNA-Seq
+  experiments with respect to biological variation. Nucleic Acids Research 40, 4288-4297  
+ 
+Orchestrating high-throughput genomic analysis with Bioconductor. W. Huber, V.J. Carey, R. Gentleman,
+  ..., M. Morgan Nature Methods, 2015:12, 115.
+  
+Ritchie, M.E., Phipson, B., Wu, D., Hu, Y., Law, C.W., Shi, W., and Smyth, G.K. (2015). limma powers
+  differential expression analyses for RNA-sequencing and microarray studies. Nucleic Acids Research 43(7),
+  e47.
+  
+Robinson MD, McCarthy DJ and Smyth GK (2010). edgeR: a Bioconductor package for differential expression
+  analysis of digital gene expression data. Bioinformatics 26, 139-140
+
+Stefan Milton Bache and Hadley Wickham (2022). magrittr: A Forward-Pipe Operator for R. R package version
+  2.0.2. https://CRAN.R-project.org/package=magrittr
+
+Uku Raudvere, Liis Kolberg, Ivan Kuzmin, Tambet Arak, Priit Adler, Hedi Peterson, Jaak Vilo: g:Profiler: a web server for functional enrichment analysis and conversions of gene lists (2019 update) Nucleic Acids Research 2019; doi:10.1093/nar/gkz369
+
+Yihui Xie (2021). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version
+  1.37.
+
+Yihui Xie (2015) Dynamic Documents with R and knitr. 2nd edition. Chapman and Hall/CRC. ISBN
+  978-1498716963
+
+Yihui Xie (2014) knitr: A Comprehensive Tool for Reproducible Research in R. In Victoria Stodden,
+  Friedrich Leisch and Roger D. Peng, editors, Implementing Reproducible Computational Research. Chapman
+  and Hall/CRC. ISBN 978-1466561595
