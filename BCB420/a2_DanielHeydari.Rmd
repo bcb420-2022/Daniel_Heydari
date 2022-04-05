@@ -795,8 +795,8 @@ write.table(x=downregulated_genes,
             row.names = FALSE,col.names = FALSE,quote = FALSE)
 
   
-write.table(x=data.frame(genename= qlf_output_hits_withgn$x),
-            file=file.path(getwd(),"GSE158890_ranked_genelist.txt"),sep = "\t",
+write.table(x=data.frame(genename= qlf_output_hits_withgn$x,F_stat= qlf_output_hits_withgn$rank),
+            file=file.path(getwd(),"GSE158890_ranked_genelist.txt"), sep = "\t", 
             row.names = FALSE,col.names = FALSE,quote = FALSE)
 ```
 

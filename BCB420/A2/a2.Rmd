@@ -1,0 +1,194 @@
+---
+title: "A2: Differential Gene expression and Preliminary ORA"
+author: "Daniel Heydari"
+date: "3/15/2022"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+In this assignment, the task was to use the normalized expression data from A1 and rank the genes via differential expression. The genetic data being used was downloaded from GEO with id GSE158890
+[(Link)](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158890). The RNAseq data was collected by Koukoulas et al., as part of a study looking to better understand the role of Hypoxia inducible factor-1 (HIF-1) and Nucleophosmin 1 (NPM1) on gene expression under hypoxia. 
+
+
+## Required Packages
+
+```{r echo=FALSE}
+
+library(devtools)
+library(limma)
+library(edgeR)
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+#BiocManager::install("ComplexHeatmap")
+
+#install.packages("circlize")
+
+```
+
+## Read in the data
+
+```{r echo=FALSE}
+
+normalized_count_data <- read.table(file=file.path(getwd(),"data", 
+                "GSE158890_normalized_counts.txt"),
+                                    header = TRUE,sep = "\t",
+                                    stringsAsFactors = FALSE,
+                                    check.names=FALSE)
+
+```
+
+## Generate Heatmap
+
+```{r current_heatmap, echo=FALSE}
+
+library(ComplexHeatmap)
+library(circlize)
+
+heatmap_matrix <- normalized_count_data[,
+                        3:ncol(normalized_count_data)]
+rownames(heatmap_matrix) <- rownames(normalized_count_data)
+colnames(heatmap_matrix) <- colnames(normalized_count_data[,
+                        3:ncol(normalized_count_data)])
+
+if(min(heatmap_matrix) == 0){
+    heatmap_col = colorRamp2(c( 0, max(heatmap_matrix)), 
+                             c( "white", "red"))
+  } else {
+    heatmap_col = colorRamp2(c(min(heatmap_matrix), 0, 
+          max(heatmap_matrix)), c("blue", "white", "red"))
+  }
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix),
+      show_row_dend = TRUE,show_column_dend = TRUE, 
+      col=heatmap_col,show_column_names = TRUE, 
+      show_row_names = FALSE,show_heatmap_legend = TRUE)
+
+plot(current_heatmap)
+```
+
+## Row Normalized Heatmap
+
+```{r rn_heatmap, echo=FALSE}
+
+heatmap_matrix <- t(scale(t(heatmap_matrix)))
+  if(min(heatmap_matrix) == 0){
+    heatmap_col = colorRamp2(c( 0, max(heatmap_matrix)), 
+                      c( "white", "red"))
+  } else {
+    heatmap_col = colorRamp2(c(min(heatmap_matrix), 0,
+        max(heatmap_matrix)), c("blue", "white", "red"))
+  }
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix),
+      show_row_dend = TRUE,show_column_dend = TRUE, 
+      col=heatmap_col,show_column_names = TRUE, 
+      show_row_names = FALSE,show_heatmap_legend = TRUE)
+
+plot(current_heatmap)
+```
+## Separate Samples
+
+```{r echo=FALSE}
+
+siNPM_hyp_samples <- grep(colnames(normalized_count_data),
+                          pattern="siNPM_hyp")
+                          
+wtNT_hyp_samples <- grep(colnames(normalized_count_data),
+                          pattern="wtNT_hyp")
+
+wtNT_norm_samples <- grep(colnames(normalized_count_data),
+                          pattern="wtNT_norm")
+
+siNPM_norm_samples <- grep(colnames(normalized_count_data),
+                          pattern="siNPM_norm")
+
+gene_of_interest <- which(rownames(normalized_count_data) == "ENSG00000237973")
+
+MTCO1P12_siNPM_hyp_samples <-  t(normalized_count_data  [gene_of_interest, siNPM_hyp_samples])
+
+colnames(MTCO1P12_siNPM_hyp_samples) <-   c("MTCO1P12 siNPM_hyp Samples")
+
+MTCO1P12_siNPM_hyp_samples
+
+
+MTCO1P12_wtNT_hyp_samples <-  t(normalized_count_data  [gene_of_interest, wtNT_hyp_samples])
+
+colnames(MTCO1P12_wtNT_hyp_samples) <-   c("MTCO1P12 wtNT_hyp Samples")
+
+MTCO1P12_wtNT_hyp_samples
+
+
+MTCO1P12_wtNT_norm_samples <-  t(normalized_count_data  [gene_of_interest, wtNT_norm_samples])
+
+colnames(MTCO1P12_wtNT_norm_samples) <-   c("MTCO1P12 wtNT_norm Samples")
+
+MTCO1P12_wtNT_norm_samples
+
+
+MTCO1P12_siNPM_norm_samples <-  t(normalized_count_data  [gene_of_interest, siNPM_norm_samples])
+
+colnames(MTCO1P12_siNPM_norm_samples) <-   c("MTCO1P12 siNPM_norm Samples")
+
+MTCO1P12_siNPM_norm_samples
+
+```
+## Welch Two-Sample t-test (Between siNPM_hyp and wtNT_norm)
+
+``` {r} 
+
+t.test(x=t(MTCO1P12_siNPM_hyp_samples),y=t(MTCO1P12_wtNT_norm_samples))
+
+```
+
+## Limma Variable Controls
+
+```{r limmaMDS}
+
+pat_colors <- rainbow(10)
+pat_colors <- unlist(lapply(pat_colors,FUN=function(x){rep(x,2)}))
+
+plot(limma::plotMDS(heatmap_matrix, col = pat_colors ))
+
+```
+
+## Model and Create Data Matrix
+
+```{r}
+# Sample design from A1
+
+
+samples <- data.frame(lapply(colnames(normalized_count_data),
+                             FUN=function(x){unlist(strsplit(x,
+                                                             split = "\\_"))[c(1,3)]}))
+colnames(samples) <- colnames(normalized_count_data)
+rownames(samples) <- c("cell_type","patients")
+samples <- data.frame(t(samples))
+
+model_design <- model.matrix(~ samples$cell_type )
+
+expressionMatrix <- as.matrix(normalized_count_data)
+rownames(expressionMatrix) <- rownames(normalized_count_data)
+colnames(expressionMatrix) <- colnames(normalized_count_data)
+minimalSet <- ExpressionSet(assayData=expressionMatrix)
+
+fit <- lmFit(minimalSet, model_design)
+
+
+# Applying Empirical Bayes to compute differential expresion
+
+fit2 <- eBayes(fit,trend=TRUE)
+
+
+topfit <- topTable(fit2,
+ coef=ncol(model_design),
+ adjust.method = "BH",
+ number = nrow(expressionMatrix))
+
+```
